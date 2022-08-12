@@ -1,0 +1,17 @@
+name: tidyfastq
+channels:
+  - R
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - bwa
+  - fastp
+  - fastqc
+  - fgbio
+  - gatk4
+  - multiqc
+  - samtools
+  - seqtk
+  - snakemake
+  - star

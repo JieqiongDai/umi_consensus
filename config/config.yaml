@@ -1,0 +1,74 @@
+# Run ID, consistent with the bnotebook project ID
+run_id: ""
+
+# Reference genome build
+build: ""
+# Path to reference genome fasta file (within the BWA index directory)
+reference_bwa: "{path_to_BWA_index/ref_fasta_file}"
+# Path to reference genome fasta file (within the GATK sequence dictionary directory)
+reference_gatk: "{path_to_GATK_dict/ref_fasta_file}"
+# Path to reference genome annotation GTF file
+gtf: "{path_to_ref_GTF}"
+# Path to STAR indices
+star_indice: "{path_to_STAR_index}"
+
+# Data Type, DNA or RNA
+data_type: ""
+
+# If needs pre-trimming QC, Y or N, default N
+pre_qc: ""
+
+# If used KAPA UMI , Y or N
+umi: ""
+# UMI read structure
+umi_structure: "3M3S+T 3M3S+T"
+
+# If needs subsampling, Y or N
+subsample: ""
+# Number of read pairs in subsampling
+read_number:
+
+# Path to the merged fastq files stored directory
+fastq: "{path_to_fastq_files}"
+# Sample ID delimitation
+## "_sub_R" for subsampling
+name_split: "_R"
+# Naming format of fastq files
+## "{sample}_sub" for subsampling
+fastq_name: "{sample}"
+
+# Path to the output directory
+out: "output"
+
+# GATK4 FastqToSam parameters
+fastq2sam: ""
+
+# Fgbio ExtractUmisFromBam parameters
+extract_umi: "-t RX -a true"
+
+# GATK4 SamToFastq parameters
+sam2fastq: "--CLIPPING_ATTRIBUTE XT --CLIPPING_ACTION 2"
+
+# Fastp trimming parameters
+## [-q 20 -u 20 -c -5 -3 -g -x -p] parames for general RNA, remove [-5 and/or -3] if have tags on 5'/3'
+## [-f 3 -F 3 -3 -W 5 -q 20 -u 40 -l 50 -x -g] parames in KAPA TE RNA SOP
+## [-g -W 5 -q 20 -u 40 -x -3 -l 75 -c] parames in KAPA TE somatica calling SOP
+trim: "-g -W 5 -q 20 -u 40 -x -3 -l 75 -c"
+
+# BWA mem alignment parameters
+## [-R "@RG\tID:A\tDS:KAPA_TE\tPL:ILLUMINA\tLB:SAMPLE\tSM:SAMPLE"] defines the read group
+## [-M] Mark shorter split hits as secondary (for Picard compatibility)
+bwa: '-R "@RG\tID:A\tDS:KAPA_TE\tPL:ILLUMINA\tLB:SAMPLE\tSM:{wildcards.sample}" -M'
+
+# STAR alingment parameters
+## [--outSAMstrandField] intronMotif option, alignments with XS strand attribute, for Cufflinks, Stringtie
+## [--outFilterIntronMotifs intronMotif] RemoveNoncanonical, for Cufflinks
+## [--outSAMattrIHstart 0] start value for the IH attribute, default 1. 0 may be required by some downstream software, such as Cufflinks or StringTie.
+## [--alignSoftClipAtReferenceEnds no] prohibit the soft-clipping of the alignments past the end of the chromosomes, useful for compatibility with Cufflinks
+star: "--outSAMstrandField intronMotif"
+
+# Fgbio GroupReadsByUmi parameters
+groupumi: ""
+
+# Fgbio CallMolecularConsensusReads parameters
+consensus: "--error-rate-post-umi 40 --error-rate-pre-umi 45 --output-per-base-tags false --min-reads 2 --max-reads 50 --min-input-base-quality 20"

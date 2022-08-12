@@ -1,0 +1,17 @@
+__default__:
+    mem: 24g
+    partition: quick,norm
+    time: '4:00:00'
+    scratch: lscratch:10
+
+Bwa:
+    mem: 64g
+    partition: norm
+    time: '240:00:00'
+    scratch: lscratch:100
+
+Star:
+    mem: 64g
+    partition: norm
+    time: '240:00:00'
+    scratch: lscratch:100

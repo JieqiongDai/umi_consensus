@@ -1,0 +1,41 @@
+# Header information
+report_header_info:
+  - Contact: "Jieqiong Dai, jieqiong.dai@roche.com"
+  - Application Type: "Subsampling and/or UMI data processing"
+
+# Section comments
+section_comments:
+  general_stats:
+    "<h4>For each sample, files with respective Sample-Name surffix represent:</h4> \
+    <h5> {sample_ID}_*_R1 (without paired {sample_ID}_R2 ) - trimming QC </h5>  \
+    <h5> {sample_ID}_R1 and {sample_ID}_R2 - QC of initial reads </h5> \
+    <h5> {sample_ID}_trimmed_sub_R1 and {sample_ID}_trimmed_sub_R2 - QC of trimmed and subsampled reads if applied </h5> \
+    <h5> {sample_ID}_cnsns_R1 and {sample_ID}_cnsns_R2 - QC of trimmed and UMI based consensus reads if applied </h5> \
+    <h5> {sample_ID}_sub_cnsns_R1 and {sample_ID}_sub_cnsns_R2 - QC of trimmed, subsampled and UMI based consensus reads if applied </h5>"
+
+# Visibility of columns in general statistics
+table_columns_visible:
+  fastp:
+    after_filtering_gc_content: False
+  FastQC:
+    percent_duplicates: True
+    avg_sequence_length: True
+
+# Rename table column titles (only works for v1.12)
+table_columns_name:
+  FastQC:
+    percent_gc: "% GC (sequence)"
+    percent_duplicates: "% Duplication (fastQC, doubled in paired reads)"
+  fastp:
+    pct_duplication: "% Duplication (fastp)"
+# Fastp file
+fastp:
+  fn: '*fastp.json'
+
+# Excluded modules:
+exclude_modules:
+  - star
+
+# Excluded sections
+remove_sections:
+  - fastqc_sequence_counts

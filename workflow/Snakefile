@@ -1,0 +1,511 @@
+### Author: Jieqiong Dai
+
+### This Snakemake pipeline is for Next Generation Sequencing reads QC, subsampling, and consensus using KAPA UMI.
+## Major steps in the pipeline include:
+# 1) Quality trimming and QC
+# 2) Subsampling (optional)
+# 3) Consensus (optional)
+## The main final output includes:
+# 1) A multiQC report of all QC metrics
+# 2) Processed fastq files
+
+## vim: ft=python
+import sys
+import os
+import glob
+import itertools
+import re
+
+# To terminate the script on any failure inside a pipe.
+shell.prefix("set -eo pipefail; ")
+configfile:"config/config.yaml"
+# The keyword localrules allows to mark a rule as local, so that it is not submitted to the cluster and instead executed on the host node.
+localrules: all
+
+# Run ID
+run_id = config["run_id"]
+
+# Reference genome build
+build = config["build"]
+
+# Data type, DANseq or RNAseq
+data_type = config["data_type"]
+
+# Optional mode
+pre_qc = config.get("pre_qc","N")
+umi = config["umi"]
+umi_structure = config["umi_structure"]
+subsample = config["subsample"]
+nread = config["read_number"]
+
+# Fastq file naming format
+fastq_name = config["fastq_name"]
+fastq_name = re.sub("/$","",fastq_name)
+# Sample ID delimitation
+name_split = config["name_split"]
+
+# Path
+run = os.getcwd() + "/"
+fastq = config["fastq"]
+fastq = re.sub("/$","",fastq)
+out = config.get("out","output")
+out = re.sub("/$","",out)
+ref_bwa = config["reference_bwa"]
+ref_gatk = config["reference_gatk"]
+gtf = config["gtf"]
+star_indice = config["star_indice"]
+
+# Parameters
+fastq2sam = config["fastq2sam"]
+extract_umi = config["extract_umi"]
+sam2fastq = config["sam2fastq"]
+trim = config["trim"]
+star = config["star"]
+multiqc_config = "config/multiqc_config.yaml"
+bwa = config["bwa"]
+groupumi = config["groupumi"]
+consensus = config["consensus"]
+
+# Sample IDs
+def Parse_SampleID(fname):
+    return fname.split(fastq + '/')[-1].split(name_split + '1.fastq.gz')[0].split(name_split + '2.fastq.gz')[0]
+file = sorted(glob.glob(fastq + '/*.fastq.gz'), key=Parse_SampleID)
+d = {}
+for key, value in itertools.groupby(file, Parse_SampleID):
+    d[key] = list(value)
+samples = d.keys()
+
+# Output files
+multiqc = out + "/archive/" + run_id + "_" + build + "_tidyfastq_multiqc_report.html"
+
+rule all:
+    input:
+          multiqc
+
+if pre_qc == "Y":
+  # Input: merged fastq files
+  # Output: pre-trimming fastqc report
+  # Description: pre-trimming fastqc
+  rule Pre_Qc:
+      input:
+            fastq + "/" + fastq_name + "_R1.fastq.gz",
+            fastq + "/" + fastq_name + "_R2.fastq.gz"
+      output:
+            out + "/qc/" + fastq_name + "_R1_fastqc.zip",
+            out + "/qc/" + fastq_name + "_R2_fastqc.zip"
+      threads: 8
+      log: "log/qc/{sample}_preqc.err"
+      shell:
+            """
+            fastqc {input} \
+                   -o {out}/qc \
+                   -f fastq \
+                   --noextract \
+                   -t {threads} \
+                   2>{log}
+            """
+
+if umi == "Y":
+  # Input: merged fastq files
+  # Output: unmapped bam file
+  # Description: convert fastq to bam
+  rule Fastq2sam:
+      input:
+            r1 = fastq + "/" + fastq_name + "_R1.fastq.gz",
+            r2 = fastq + "/" + fastq_name + "_R2.fastq.gz"
+      output:
+            out + "/extract_umi/{sample}_unmapped.bam"
+      params:
+            fastq2sam = fastq2sam
+      threads: 8
+      log:  "log/extract_umi/{sample}_fastq2sam.err"
+      shell:
+            """
+            gatk FastqToSam \
+                 -F1 {input.r1} \
+                 -F2 {input.r2} \
+                 -O {output} \
+                 -SM {wildcards.sample} \
+                 {params.fastq2sam} \
+                 --TMP_DIR ./tmp \
+                 2>{log}
+            """
+  # Input: unmapped bam file
+  # Output: UMI-extracted unmapped bam file
+  # Description: extract UMI
+  rule Extracumi:
+      input:
+            rules.Fastq2sam.output
+      output:
+            out + "/extract_umi/{sample}_unmapped_umi_extracted.bam"
+      params:
+            umi_structure = umi_structure,
+            extract_umi = extract_umi
+      threads: 8
+      log:  "log/extract_umi/{sample}_extract_umi.err"
+      shell:
+            """
+            fgbio ExtractUmisFromBam \
+                  -i {input} \
+                  -o {output} \
+                  -r {params.umi_structure} \
+                  {params.extract_umi} \
+                  2>{log}
+            """
+  # Input: UMI-extracted unmapped bam file
+  # Output: UMI-extracted fastq files
+  # Description: convert bam to fastq
+  rule Sam2fastq:
+      input:
+            rules.Extracumi.output
+      output:
+            r1 = out + "/extract_umi/{sample}_umi_extracted_R1.fastq",
+            r2 = out + "/extract_umi/{sample}_umi_extracted_R2.fastq"
+      params:
+            sam2fastq = sam2fastq
+      threads: 8
+      log:  "log/extract_umi/{sample}_sam2fastq.err"
+      shell:
+            """
+            gatk SamToFastq \
+                 -I {input} \
+                 -F {output.r1} \
+                 -F2 {output.r2} \
+                 {params.sam2fastq} \
+                 --TMP_DIR ./tmp \
+                 2>{log}
+            """
+  r1 = rules.Sam2fastq.output.r1
+  r2 = rules.Sam2fastq.output.r2
+
+elif umi == "N":
+    r1 = fastq + "/" + fastq_name + "_R1.fastq.gz"
+    r2 = fastq + "/" + fastq_name + "_R2.fastq.gz"
+
+# Input: merged fastq files or UMI-extracted fastq files
+# Output: trimmed fastq files
+# Description: trimming
+rule Trim:
+    input:
+          r1 = r1,
+          r2 = r2
+    output:
+          r1 = out + "/trimmed/{sample}/{sample}_trimmed_R1.fastq.gz",
+          r2 = out + "/trimmed/{sample}/{sample}_trimmed_R2.fastq.gz",
+          json = out + "/trimmed/{sample}/{sample}_trimming.fastp.json",
+          html = out + "/trimmed/{sample}/{sample}_trimming.fastp.html"
+    params:
+          trim = trim
+    threads: 8
+    log: "log/trim/{sample}_trim.err"
+    shell:
+          """
+          fastp -i {input.r1} -I {input.r2} \
+                -o {output.r1} -O {output.r2} \
+                -w {threads} \
+                -j {output.json} \
+                -h {output.html} \
+                {params.trim} \
+                2>{log}
+          """
+r1_2 = rules.Trim.output.r1
+r2_2 = rules.Trim.output.r2
+
+if subsample == "Y":
+  # Input: merged fastq files
+  # Output: subsampled fastq files
+  # Description: subsampling
+  rule Subsample:
+      input:
+            r1 = r1_2,
+            r2 = r2_2
+      output:
+            r1 = out + "/subsample_fastq/{sample}_trimmed_sub_R1.fastq.gz",
+            r2 = out + "/subsample_fastq/{sample}_trimmed_sub_R2.fastq.gz"
+      params:
+            nread = nread
+      threads: 8
+      log:
+            log1 = "log/subsample/{sample}_trimmed_sub_R1.err",
+            log2 = "log/subsample/{sample}_trimmed_sub_R2.err"
+      shell:
+            """
+            seqtk sample -s 100 {input.r1} \
+                         {params.nread} \
+                         > {out}/subsample_fastq/{wildcards.sample}_trimmed_sub_R1.fastq \
+                         2>{log.log1}
+            seqtk sample -s 100 {input.r2} \
+                         {params.nread} \
+                         > {out}/subsample_fastq/{wildcards.sample}_trimmed_sub_R2.fastq \
+                         2>{log.log2}
+            gzip {out}/subsample_fastq/{wildcards.sample}_trimmed_sub_R1.fastq
+            gzip {out}/subsample_fastq/{wildcards.sample}_trimmed_sub_R2.fastq
+            """
+  r1_2 = rules.Subsample.output.r1
+  r2_2 = rules.Subsample.output.r2
+
+if umi == "N" and subsample == "Y":
+  r1_3 = r1_2
+  r2_3 = r2_2
+  r1_3_qc = out + "/qc/{sample}_trimmed_sub_R1_fastqc.zip"
+  r2_3_qc = out + "/qc/{sample}_trimmed_sub_R2_fastqc.zip"
+elif umi == "N" and subsample == "N":
+  r1_3 = r1_2
+  r2_3 = r2_2
+  r1_3_qc = out + "/qc/{sample}_trimmed_R1_fastqc.zip"
+  r2_3_qc = out + "/qc/{sample}_trimmed_R2_fastqc.zip"
+elif umi == "Y" and subsample == "Y":
+  r1_3a = out + "/consensus/fastq/{sample}_sub_cnsns_R1.fastq"
+  r2_3a = out + "/consensus/fastq/{sample}_sub_cnsns_R2.fastq"
+  r1_3 = out + "/consensus/fastq/{sample}_sub_cnsns_R1.fastq.gz"
+  r2_3 = out + "/consensus/fastq/{sample}_sub_cnsns_R2.fastq.gz"
+  r1_3_qc = out + "/qc/{sample}_sub_cnsns_R1_fastqc.zip"
+  r2_3_qc = out + "/qc/{sample}_sub_cnsns_R2_fastqc.zip"
+elif umi == "Y" and subsample == "N":
+  r1_3a = out + "/consensus/fastq/{sample}_cnsns_R1.fastq"
+  r2_3a = out + "/consensus/fastq/{sample}_cnsns_R2.fastq"
+  r1_3 = out + "/consensus/fastq/{sample}_cnsns_R1.fastq.gz"
+  r2_3 = out + "/consensus/fastq/{sample}_cnsns_R2.fastq.gz"
+  r1_3_qc = out + "/qc/{sample}_cnsns_R1_fastqc.zip"
+  r2_3_qc = out + "/qc/{sample}_cnsns_R2_fastqc.zip"
+
+if umi == "Y":
+  if data_type == "DNA":
+      # Input: UMI extraced and/or subsampled fastq files
+      # Output: aligned bam file
+      # Description: DNA alignment
+      rule Bwa:
+          input:
+                r1 = r1_2,
+                r2 = r2_2
+          output:
+                sam = out + "/align/{sample}/{sample}_umi_aligned.sam",
+                bam = out + "/align/{sample}/{sample}_umi_aligned.bam"
+          params:
+                ref = ref_bwa,
+                bwa = bwa
+          threads: 8
+          log:
+                log1 = "log/align/{sample}_bwa.err",
+                log2 = "log/align/{sample}_samtools.err"
+          shell:
+                """
+                bwa mem -t {threads} \
+                        {params.bwa} \
+                        {params.ref} \
+                        {input.r1} \
+                        {input.r2} \
+                        > {output.sam} \
+                        2>{log.log1}
+                samtools view -b \
+                        {output.sam} \
+                        > {output.bam} \
+                        2>{log.log2}
+                """
+      bam = rules.Bwa.output.bam
+  elif data_type == "RNA":
+      # Input: UMI extraced and/or subsampled fastq files
+      # Output: aligned bam file
+      # Description: RNA alignment
+      rule Star:
+          input:
+                r1 = r1_2,
+                r2 = r2_2
+          output:
+                bam = out + "/align/{sample}/{sample}_Aligned.sortedByCoord.out.bam"
+          params:
+                indice = star_indice,
+                gtf = gtf,
+                star = star
+          threads: 8
+          log:  "log/align/{sample}_star.err"
+          shell:
+                """
+                STAR --runThreadN {threads} \
+                     --genomeDir {params.indice} \
+                     --sjdbGTFfile {params.gtf} \
+                     --readFilesIn {input[0]} {input[1]} \
+                     --readFilesCommand zcat \
+                     --outFileNamePrefix {out}/align/{wildcards.sample}/{wildcards.sample}_ \
+                     --outSAMtype BAM SortedByCoordinate \
+                     --twopassMode Basic \
+                     {params.star} \
+                     2>{log}
+                  """
+      bam = rules.Star.output.bam
+  # Input: mapped and unmapped bam files
+  # Output: merged bam file
+  # Description: add UMI information into the aligned reads
+  rule Mergebam:
+      input:
+            bam,
+            rules.Extracumi.output
+      output:
+            out + "/consensus/{sample}/{sample}_umi_extracted_aligned_merged.bam"
+      params:
+            ref = ref_gatk
+      threads: 8
+      log:  "log/consensus/{sample}_merge.err"
+      shell:
+            """
+            gatk MergeBamAlignment \
+                 --ATTRIBUTES_TO_RETAIN X0 \
+                 --ATTRIBUTES_TO_REMOVE NM \
+                 --ATTRIBUTES_TO_REMOVE MD \
+                 --ALIGNED_BAM {input[0]} \
+                 --UNMAPPED_BAM {input[1]} \
+                 --OUTPUT {output} \
+                 --REFERENCE_SEQUENCE {params.ref} \
+                 --SORT_ORDER queryname \
+                 --ALIGNED_READS_ONLY true \
+                 --MAX_INSERTIONS_OR_DELETIONS -1 \
+                 --PRIMARY_ALIGNMENT_STRATEGY MostDistant \
+                 --ALIGNER_PROPER_PAIR_FLAGS true \
+                 --CLIP_OVERLAPPING_READS false \
+                 --TMP_DIR ./tmp \
+                 2>{log}
+            """
+  # Input: merged bam file
+  # Output: filtered bam file
+  # Description: filter out unmapped reads
+  rule Filter:
+      input:
+            rules.Mergebam.output
+      output:
+            out + "/consensus/{sample}/{sample}_umi_extracted_aligned_merged_filtered.bam"
+      threads: 8
+      log:  "log/consensus/{sample}_filter.err"
+      shell:
+            """
+            samtools view \
+                     -f 2 \
+                     -bh \
+                     {input} > {output} \
+                     2>{log}
+            """
+  # Input: filtered bam file
+  # Output: umi grouped bam file
+  # Description: group reads originating from the same source molecule
+  rule Group:
+      input:
+            rules.Filter.output
+      output:
+            bam = out + "/consensus/{sample}/{sample}_umi_grouped.bam",
+            table = out + "/consensus/{sample}/{sample}_umi_group_data.tsv"
+      params:
+            groupumi = groupumi
+      threads: 16
+      log:  "log/consensus/{sample}_group.err"
+      shell:
+            """
+            fgbio GroupReadsByUmi \
+                  --input={input} \
+                  --output={output.bam} \
+                  --strategy=adjacency \
+                  --edits=1 \
+                  -t RX \
+                  -f {output.table} \
+                  {params.groupumi} \
+                  2>{log}
+            """
+  # Input: umi grouped bam file
+  # Output: consensus unmapped bam file
+  # Description: call consensus sequence
+  rule Consensus:
+       input:
+             rules.Group.output.bam
+       output:
+             out + "/consensus/{sample}/{sample}_umi_consensus_unmapped.bam"
+       params:
+             consensus = consensus
+       threads: 8
+       log:  "log/consensus/{sample}_consensus.err"
+       shell:
+             """
+             fgbio CallMolecularConsensusReads \
+                   --input={input} \
+                   --output={output} \
+                   {params.consensus} \
+                   --read-name-prefix='consensus' \
+                   2>{log}
+             """
+  # Input: consensus unmapped bam file
+  # Output: consensus unmapped fastq files
+  # Description: convert bam to fastq
+  rule Sam2fastq2:
+      input:
+            rules.Consensus.output
+      output:
+            r1_3,
+            r2_3
+      params:
+            sam2fastq = sam2fastq,
+            r1 = r1_3a,
+            r2 = r2_3a
+      threads: 8
+      log:  "log/consensus/{sample}_sam2fastq.err"
+      shell:
+            """
+            gatk SamToFastq \
+                 -I {input} \
+                 -F {params.r1} \
+                 -F2 {params.r2} \
+                 {params.sam2fastq} \
+                 --TMP_DIR ./tmp \
+                 2>{log}
+            gzip {params.r1}
+            gzip {params.r2}
+            """
+# Input: final fastq files
+# Output: fastqc report
+# Description: fastqc
+rule Qc:
+    input:
+          r1_3,
+          r2_3
+    output:
+          r1_3_qc,
+          r2_3_qc
+    threads: 8
+    log: "log/qc/{sample}_qc.err"
+    shell:
+          """
+          mkdir -p {out}/final_fastq
+          ln -s {run}{input[0]} {run}{out}/final_fastq/
+          ln -s {run}{input[1]} {run}{out}/final_fastq/
+          fastqc {input} \
+                 -o {out}/qc \
+                 -f fastq \
+                 --noextract \
+                 -t {threads} \
+                 2>{log}
+          """
+# Input: all QC output
+# Output: multiqc report
+# Description: multiqc
+rule Multiqc:
+    input:
+          lambda wildcards: expand(rules.Pre_Qc.output, sample = samples) if pre_qc == "Y" else [],
+          expand(rules.Trim.output, sample = samples),
+          expand(rules.Qc.output, sample = samples)
+    output:
+          out + "/multiqc/" + run_id + "_" + build +"_tidyfastq_multiqc_report.html",
+          multiqc
+    params:
+          multiqc_config = multiqc_config
+    threads: 8
+    log: "log/multiqc/multiqc.err"
+    shell:
+          """
+          set +e
+          touch {out}/multiqc/dummy_mqc.csv
+          multiqc {out} \
+                  --title {run_id}_{build}_tidyfastq \
+                  -o {out}/multiqc \
+                  --ignore *STARpass1* --ignore *fi_workdir* \
+                  -f \
+                  -c {params.multiqc_config} \
+                  2>{log}
+          cp {output[0]} {output[1]}
+          cp config/config.yaml {out}/archive/
+          """
